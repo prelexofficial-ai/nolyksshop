@@ -1,0 +1,1 @@
+"""NOLYK SHOP bot package."""
