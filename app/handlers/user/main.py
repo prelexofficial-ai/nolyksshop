@@ -13,6 +13,7 @@ from app.keyboards.admin import topup_decision
 from app.keyboards.user import (
     back_main,
     categories_menu,
+    info_menu,
     invoice_menu,
     main_menu,
     owner_button,
@@ -98,6 +99,15 @@ async def start(message: Message, db: Database, bot: Bot, config: Config) -> Non
     await show_main(message, db, config)
 
 
+# Fallback: handle /start variants that were not matched by CommandStart.
+@router.message(F.text.startswith("/start"))
+async def _start_fallback(message: Message, db: Database, bot: Bot, config: Config) -> None:
+    user = await _load_user(message, db, bot, config)
+    if user is None:
+        return
+    await show_main(message, db, config)
+
+
 @router.callback_query(F.data == "u:sub:check")
 async def check_subscription(callback: CallbackQuery, db: Database, bot: Bot, config: Config) -> None:
     await callback.answer()
@@ -127,7 +137,7 @@ async def info(callback: CallbackQuery, db: Database, bot: Bot, config: Config) 
     await callback.answer()
     if await _load_user(callback, db, bot, config) is None:
         return
-    await answer_screen(callback, db, await db.get_setting("info_text"), back_main())
+    await answer_screen(callback, db, await db.get_setting("info_text"), info_menu(await db.list_info_buttons()))
 
 
 @router.callback_query(F.data == "u:faq")

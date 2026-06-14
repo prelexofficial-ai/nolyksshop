@@ -6,8 +6,15 @@ from typing import Any
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.keyboards.premium import button as premium_button
+from app.keyboards.premium import button as premium_button, split_button_icon, url_button_kwargs
 from app.utils.formatting import money
+
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
 
 
 def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
@@ -54,7 +61,12 @@ def topup_methods(owner_username: str | None) -> InlineKeyboardMarkup:
 def categories_menu(categories: Iterable[Any]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for category in categories:
-        kb.button(text=str(category["title_text"]), callback_data=f"u:cat:{category['id']}")
+        text, icon = split_button_icon(str(category["title_text"]))
+        stored_icon = _row_value(category, "icon_custom_emoji_id")
+        kwargs = {"text": text, "callback_data": f"u:cat:{category['id']}"}
+        if stored_icon or icon:
+            kwargs["icon_custom_emoji_id"] = stored_icon or icon
+        kb.button(**kwargs)
     premium_button(kb, "⬅️", "Назад", callback_data="u:main")
     kb.adjust(1)
     return kb.as_markup()
@@ -63,11 +75,32 @@ def categories_menu(categories: Iterable[Any]) -> InlineKeyboardMarkup:
 def products_menu(products: Iterable[Any], category_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for product in products:
-        kb.button(
-            text=f"{product['title_text']} - ${money(product['price'])}",
-            callback_data=f"u:prod:{product['id']}",
-        )
+        title_text, icon = split_button_icon(str(product["title_text"]))
+        stored_icon = _row_value(product, "icon_custom_emoji_id")
+        kwargs = {
+            "text": f"{title_text} - ${money(product['price'])}",
+            "callback_data": f"u:prod:{product['id']}",
+        }
+        if stored_icon or icon:
+            kwargs["icon_custom_emoji_id"] = stored_icon or icon
+        kb.button(**kwargs)
     premium_button(kb, "⬅️", "Назад", callback_data="u:catalog")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def info_menu(buttons: Iterable[Any]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for item in buttons:
+        kb.button(
+            **url_button_kwargs(
+                text=str(item["text"]),
+                url=str(item["url"]),
+                style=str(_row_value(item, "style", "default") or "default"),
+                icon_custom_emoji_id=_row_value(item, "icon_custom_emoji_id"),
+            )
+        )
+    premium_button(kb, "⬅️", "Назад", callback_data="u:main")
     kb.adjust(1)
     return kb.as_markup()
 

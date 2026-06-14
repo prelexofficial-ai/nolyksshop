@@ -100,6 +100,7 @@ class Database:
                 category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
                 title_text TEXT NOT NULL,
                 title_html TEXT NOT NULL,
+                icon_custom_emoji_id TEXT,
                 price REAL NOT NULL,
                 description_html TEXT NOT NULL,
                 photo_id TEXT,
@@ -190,6 +191,12 @@ class Database:
             if not any(str(c[1]) == "icon_custom_emoji_id" for c in cols):
                 await db.execute("ALTER TABLE categories ADD COLUMN icon_custom_emoji_id TEXT")
                 await db.commit()
+            cur = await db.execute("PRAGMA table_info('products')")
+            cols = await cur.fetchall()
+            await cur.close()
+            if not any(str(c[1]) == "icon_custom_emoji_id" for c in cols):
+                await db.execute("ALTER TABLE products ADD COLUMN icon_custom_emoji_id TEXT")
+                await db.commit()
         except Exception:
             # Best-effort migration; ignore if not possible
             pass
@@ -233,6 +240,58 @@ class Database:
     async def get_settings(self) -> dict[str, str]:
         rows = await self.fetchall("SELECT key, value FROM settings")
         return {str(row["key"]): str(row["value"]) for row in rows}
+
+    async def list_info_buttons(self) -> list[aiosqlite.Row]:
+        return await self.fetchall("SELECT * FROM info_buttons ORDER BY position ASC, id ASC")
+
+    async def get_info_button(self, button_id: int) -> aiosqlite.Row | None:
+        return await self.fetchone("SELECT * FROM info_buttons WHERE id = ?", (button_id,))
+
+    async def create_info_button(
+        self,
+        text: str,
+        url: str,
+        icon_custom_emoji_id: str | None = None,
+        style: str = "default",
+    ) -> int:
+        row = await self.fetchone("SELECT COALESCE(MAX(position), 0) + 1 AS position FROM info_buttons")
+        position = int(row["position"] if row else 1)
+        return await self.execute(
+            """
+            INSERT INTO info_buttons(text, url, icon_custom_emoji_id, style, position, created_at)
+            VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (text, url, icon_custom_emoji_id, style, position, now_iso()),
+        )
+
+    async def update_info_button_field(self, button_id: int, field: str, value: Any) -> None:
+        allowed = {"text", "url", "icon_custom_emoji_id", "style", "position"}
+        if field not in allowed:
+            raise ValueError(f"Field {field!r} is not editable.")
+        await self.execute(f"UPDATE info_buttons SET {field} = ? WHERE id = ?", (value, button_id))
+
+    async def delete_info_button(self, button_id: int) -> None:
+        await self.execute("DELETE FROM info_buttons WHERE id = ?", (button_id,))
+        await self.normalize_info_button_positions()
+
+    async def normalize_info_button_positions(self) -> None:
+        buttons = await self.list_info_buttons()
+        for position, button in enumerate(buttons, start=1):
+            if int(button["position"]) != position:
+                await self.execute("UPDATE info_buttons SET position = ? WHERE id = ?", (position, button["id"]))
+
+    async def move_info_button(self, button_id: int, direction: str) -> None:
+        buttons = await self.list_info_buttons()
+        index = next((idx for idx, button in enumerate(buttons) if int(button["id"]) == button_id), None)
+        if index is None:
+            return
+        target_index = index - 1 if direction == "left" else index + 1
+        if target_index < 0 or target_index >= len(buttons):
+            return
+        ordered = list(buttons)
+        ordered[index], ordered[target_index] = ordered[target_index], ordered[index]
+        for position, button in enumerate(ordered, start=1):
+            await self.execute("UPDATE info_buttons SET position = ? WHERE id = ?", (position, button["id"]))
 
     async def upsert_user(self, telegram_id: int, username: str | None, full_name: str) -> tuple[aiosqlite.Row, bool]:
         row = await self.fetchone("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
@@ -337,6 +396,7 @@ class Database:
         category_id: int,
         title_text: str,
         title_html: str,
+        icon_custom_emoji_id: str | None,
         price: float,
         description_html: str,
         photo_id: str | None,
@@ -344,17 +404,36 @@ class Database:
     ) -> int:
         return await self.execute(
             """
-            INSERT INTO products(category_id, title_text, title_html, price, description_html, photo_id, view_url, created_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO products(category_id, title_text, title_html, icon_custom_emoji_id, price, description_html, photo_id, view_url, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (category_id, title_text, title_html, price, description_html, photo_id, view_url, now_iso()),
+            (
+                category_id,
+                title_text,
+                title_html,
+                icon_custom_emoji_id,
+                price,
+                description_html,
+                photo_id,
+                view_url,
+                now_iso(),
+            ),
         )
 
     async def get_product(self, product_id: int) -> aiosqlite.Row | None:
         return await self.fetchone("SELECT * FROM products WHERE id = ?", (product_id,))
 
     async def update_product_field(self, product_id: int, field: str, value: Any) -> None:
-        allowed = {"title_text", "title_html", "price", "description_html", "photo_id", "view_url", "is_active"}
+        allowed = {
+            "title_text",
+            "title_html",
+            "icon_custom_emoji_id",
+            "price",
+            "description_html",
+            "photo_id",
+            "view_url",
+            "is_active",
+        }
         if field not in allowed:
             raise ValueError(f"Field {field!r} is not editable.")
         await self.execute(f"UPDATE products SET {field} = ? WHERE id = ?", (value, product_id))

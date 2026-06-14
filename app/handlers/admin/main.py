@@ -4,7 +4,6 @@ import html
 from typing import Any
 
 from aiogram import Bot, F, Router
-from aiogram.enums import ButtonStyle
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -12,7 +11,14 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from app.database import Database
 from app.filters import IsAdmin
-from app.keyboards.premium import emoji_id, premiumize_html, tg, first_custom_emoji_id, split_button_icon
+from app.keyboards.premium import (
+    emoji_id,
+    first_custom_emoji_id,
+    premiumize_html,
+    split_button_icon,
+    tg,
+    url_button_kwargs,
+)
 from app.keyboards.admin import (
     ALL_SETTING_LABELS,
     PAYMENT_LABELS,
@@ -25,6 +31,9 @@ from app.keyboards.admin import (
     broadcast_start,
     catalog_menu,
     category_menu,
+    info_button_edit_menu,
+    info_button_style_menu,
+    info_buttons_menu,
     payments_menu,
     product_admin_menu,
     promo_menu,
@@ -33,12 +42,13 @@ from app.keyboards.admin import (
     user_admin_menu,
     users_menu,
 )
-from app.keyboards.user import owner_button
+from app.keyboards.user import main_menu, owner_button
 from app.services.logs import send_log
 from app.services.screens import answer_screen
 from app.states import (
     BroadcastStates,
     CategoryStates,
+    InfoButtonStates,
     ProductEditStates,
     ProductStates,
     PromoAdminStates,
@@ -86,19 +96,15 @@ def _broadcast_preview_markup(buttons: list[dict[str, str]]) -> InlineKeyboardMa
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-STYLE_MAP = {
-    "danger": ButtonStyle.DANGER,
-    "success": ButtonStyle.SUCCESS,
-    "primary": ButtonStyle.PRIMARY,
-}
-
-
 def _styled_url_button(button: dict[str, str]) -> InlineKeyboardButton:
-    style = STYLE_MAP.get(button.get("style", "default"))
-    kwargs: dict[str, Any] = {"text": button["text"], "url": button["url"]}
-    if style is not None:
-        kwargs["style"] = style
-    return InlineKeyboardButton(**kwargs)
+    return InlineKeyboardButton(
+        **url_button_kwargs(
+            text=button["text"],
+            url=button["url"],
+            style=button.get("style", "default"),
+            icon_custom_emoji_id=button.get("icon_custom_emoji_id"),
+        )
+    )
 
 
 def _broadcast_state_text(data: dict[str, Any]) -> str:
@@ -118,6 +124,35 @@ def _broadcast_state_text(data: dict[str, Any]) -> str:
             style = button.get("style", "default")
             lines.append(f"{index}. {html.escape(button['text'])} · <code>{html.escape(style)}</code>")
     return "\n".join(lines)
+
+
+def _valid_button_url(url: str) -> bool:
+    return url.startswith(("http://", "https://", "tg://"))
+
+
+def _info_buttons_text(buttons: list[Any]) -> str:
+    lines = [
+        f"{tg('ℹ️')} <b>Кнопки информации</b>",
+        "",
+        "Эти URL-кнопки показываются под текстом раздела «Инфа».",
+        f"Всего кнопок: <b>{len(buttons)}</b>",
+    ]
+    if buttons:
+        lines.append("")
+        for index, button in enumerate(buttons, start=1):
+            style = str(button["style"] or "default")
+            lines.append(f"{index}. {html.escape(str(button['text']))} · <code>{html.escape(style)}</code>")
+    return "\n".join(lines)
+
+
+def _info_button_text(button: Any) -> str:
+    return (
+        f"{tg('🔗')} <b>Кнопка информации</b>\n\n"
+        f"Текст: <b>{html.escape(str(button['text']))}</b>\n"
+        f"Ссылка: <code>{html.escape(str(button['url']))}</code>\n"
+        f"Стиль: <code>{html.escape(str(button['style'] or 'default'))}</code>\n"
+        f"Позиция: <b>{button['position']}</b>"
+    )
 
 
 def _setting_back_menu(key: str) -> InlineKeyboardMarkup:
@@ -193,6 +228,13 @@ async def _update_prompt_from_input(
 @router.message(Command("admin"))
 async def admin_command(message: Message, db: Database) -> None:
     await answer_screen(message, db, f"{tg('⚙️')} <b>Админ-панель</b>", admin_main())
+    await _delete_input(message)
+
+
+@router.message(Command("start"))
+async def admin_start_command(message: Message, state: FSMContext, db: Database) -> None:
+    await state.clear()
+    await answer_screen(message, db, await db.get_setting("main_text"), main_menu(is_admin=True))
     await _delete_input(message)
 
 
@@ -294,6 +336,179 @@ async def setting_save(message: Message, state: FSMContext, db: Database) -> Non
         value = plain_from_message(message).strip()
     await db.set_setting(key, value)
     await _update_prompt_from_input(message, state, f"{tg('✅')} Настройка сохранена.", menu, clear_state=True)
+
+
+@router.callback_query(F.data == "a:info:buttons")
+async def info_buttons_open(callback: CallbackQuery, db: Database) -> None:
+    await callback.answer()
+    buttons = await db.list_info_buttons()
+    await answer_screen(callback, db, _info_buttons_text(buttons), info_buttons_menu(buttons))
+
+
+@router.callback_query(F.data == "a:info:btn:add")
+async def info_button_add_start(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    await callback.answer()
+    await state.set_state(InfoButtonStates.text)
+    await _show_prompt(
+        callback,
+        state,
+        db,
+        "Введите текст URL-кнопки. Если в тексте есть премиум-эмодзи из списка, он станет иконкой кнопки.",
+        info_buttons_menu(await db.list_info_buttons()),
+    )
+
+
+@router.message(InfoButtonStates.text)
+async def info_button_text_save(message: Message, state: FSMContext, db: Database) -> None:
+    raw_text = plain_from_message(message).strip()
+    if not raw_text:
+        await _update_prompt_from_input(
+            message,
+            state,
+            "Текст кнопки не должен быть пустым.",
+            info_buttons_menu(await db.list_info_buttons()),
+        )
+        return
+    text, icon_id = split_button_icon(raw_text, first_custom_emoji_id(message))
+    await state.update_data(info_button_text=text, info_button_icon_id=icon_id)
+    await state.set_state(InfoButtonStates.url)
+    await _update_prompt_from_input(message, state, "Теперь отправьте ссылку для кнопки.")
+
+
+@router.message(InfoButtonStates.url)
+async def info_button_url_save(message: Message, state: FSMContext, db: Database) -> None:
+    url = plain_from_message(message).strip()
+    if not _valid_button_url(url):
+        await _update_prompt_from_input(message, state, "Ссылка должна начинаться с http://, https:// или tg://.")
+        return
+    data = await state.get_data()
+    await db.create_info_button(
+        text=str(data.get("info_button_text") or "Кнопка"),
+        url=url,
+        icon_custom_emoji_id=data.get("info_button_icon_id"),
+    )
+    buttons = await db.list_info_buttons()
+    await _update_prompt_from_input(
+        message,
+        state,
+        f"{tg('✅')} Кнопка добавлена.\n\n{_info_buttons_text(buttons)}",
+        info_buttons_menu(buttons),
+        clear_state=True,
+    )
+
+
+@router.callback_query(F.data.regexp(r"^a:info:btn:\d+$"))
+async def info_button_open(callback: CallbackQuery, db: Database) -> None:
+    await callback.answer()
+    button_id = int(callback.data.split(":")[-1])
+    button = await db.get_info_button(button_id)
+    if button is None:
+        buttons = await db.list_info_buttons()
+        await answer_screen(callback, db, "Кнопка не найдена.", info_buttons_menu(buttons))
+        return
+    await answer_screen(callback, db, _info_button_text(button), info_button_edit_menu(button))
+
+
+@router.callback_query(F.data.regexp(r"^a:info:edit:\d+:(text|url)$"))
+async def info_button_edit_start(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    await callback.answer()
+    _, _, _, button_id, field = callback.data.split(":")
+    button = await db.get_info_button(int(button_id))
+    if button is None:
+        await answer_screen(callback, db, "Кнопка не найдена.", info_buttons_menu(await db.list_info_buttons()))
+        return
+    await state.update_data(info_button_id=int(button_id))
+    if field == "text":
+        await state.set_state(InfoButtonStates.edit_text)
+        await _show_prompt(callback, state, db, "Введите новый текст кнопки.", info_button_edit_menu(button))
+    else:
+        await state.set_state(InfoButtonStates.edit_url)
+        await _show_prompt(callback, state, db, "Введите новую ссылку кнопки.", info_button_edit_menu(button))
+
+
+@router.message(InfoButtonStates.edit_text)
+async def info_button_edit_text_save(message: Message, state: FSMContext, db: Database) -> None:
+    data = await state.get_data()
+    button_id = int(data["info_button_id"])
+    raw_text = plain_from_message(message).strip()
+    button = await db.get_info_button(button_id)
+    menu = info_button_edit_menu(button) if button else info_buttons_menu(await db.list_info_buttons())
+    if not raw_text:
+        await _update_prompt_from_input(message, state, "Текст кнопки не должен быть пустым.", menu)
+        return
+    text, icon_id = split_button_icon(raw_text, first_custom_emoji_id(message))
+    await db.update_info_button_field(button_id, "text", text)
+    await db.update_info_button_field(button_id, "icon_custom_emoji_id", icon_id)
+    updated = await db.get_info_button(button_id)
+    await _update_prompt_from_input(
+        message,
+        state,
+        f"{tg('✅')} Кнопка обновлена.\n\n{_info_button_text(updated)}" if updated else "Кнопка обновлена.",
+        info_button_edit_menu(updated) if updated else info_buttons_menu(await db.list_info_buttons()),
+        clear_state=True,
+    )
+
+
+@router.message(InfoButtonStates.edit_url)
+async def info_button_edit_url_save(message: Message, state: FSMContext, db: Database) -> None:
+    data = await state.get_data()
+    button_id = int(data["info_button_id"])
+    url = plain_from_message(message).strip()
+    button = await db.get_info_button(button_id)
+    menu = info_button_edit_menu(button) if button else info_buttons_menu(await db.list_info_buttons())
+    if not _valid_button_url(url):
+        await _update_prompt_from_input(message, state, "Ссылка должна начинаться с http://, https:// или tg://.", menu)
+        return
+    await db.update_info_button_field(button_id, "url", url)
+    updated = await db.get_info_button(button_id)
+    await _update_prompt_from_input(
+        message,
+        state,
+        f"{tg('✅')} Ссылка обновлена.\n\n{_info_button_text(updated)}" if updated else "Ссылка обновлена.",
+        info_button_edit_menu(updated) if updated else info_buttons_menu(await db.list_info_buttons()),
+        clear_state=True,
+    )
+
+
+@router.callback_query(F.data.regexp(r"^a:info:style:\d+$"))
+async def info_button_style_open(callback: CallbackQuery, db: Database) -> None:
+    await callback.answer()
+    button_id = int(callback.data.split(":")[-1])
+    button = await db.get_info_button(button_id)
+    if button is None:
+        await answer_screen(callback, db, "Кнопка не найдена.", info_buttons_menu(await db.list_info_buttons()))
+        return
+    await answer_screen(callback, db, "Выберите стиль кнопки.", info_button_style_menu(button_id))
+
+
+@router.callback_query(F.data.regexp(r"^a:info:style:\d+:(default|primary|success|danger)$"))
+async def info_button_style_save(callback: CallbackQuery, db: Database) -> None:
+    await callback.answer("Стиль сохранен")
+    parts = callback.data.split(":")
+    button_id = int(parts[3])
+    style = parts[4]
+    await db.update_info_button_field(button_id, "style", style)
+    button = await db.get_info_button(button_id)
+    if button:
+        await answer_screen(callback, db, _info_button_text(button), info_button_edit_menu(button))
+
+
+@router.callback_query(F.data.regexp(r"^a:info:move:\d+:(left|right)$"))
+async def info_button_move(callback: CallbackQuery, db: Database) -> None:
+    await callback.answer("Позиция изменена")
+    _, _, _, button_id, direction = callback.data.split(":")
+    await db.move_info_button(int(button_id), direction)
+    buttons = await db.list_info_buttons()
+    await answer_screen(callback, db, _info_buttons_text(buttons), info_buttons_menu(buttons))
+
+
+@router.callback_query(F.data.startswith("a:info:del:"))
+async def info_button_delete(callback: CallbackQuery, db: Database) -> None:
+    await callback.answer("Удалено")
+    button_id = int(callback.data.split(":")[-1])
+    await db.delete_info_button(button_id)
+    buttons = await db.list_info_buttons()
+    await answer_screen(callback, db, f"{tg('🗑')} Кнопка удалена.\n\n{_info_buttons_text(buttons)}", info_buttons_menu(buttons))
 
 
 @router.callback_query(F.data == "a:catalog")
@@ -424,7 +639,8 @@ async def product_title(message: Message, state: FSMContext) -> None:
     if not title:
         await _update_prompt_from_input(message, state, "Название не должно быть пустым.")
         return
-    await state.update_data(title_text=title, title_html=html_from_message(message))
+    title_text, icon_id = split_button_icon(title, first_custom_emoji_id(message))
+    await state.update_data(title_text=title_text, title_html=html_from_message(message), title_icon_id=icon_id)
     await state.set_state(ProductStates.price)
     await _update_prompt_from_input(message, state, "Введите цену товара в долларах.")
 
@@ -479,6 +695,7 @@ async def product_save(message: Message, state: FSMContext, db: Database) -> Non
         category_id=int(data["category_id"]),
         title_text=str(data["title_text"]),
         title_html=str(data["title_html"]),
+        icon_custom_emoji_id=data.get("title_icon_id"),
         price=float(data["price"]),
         description_html=str(data["description_html"]),
         photo_id=data.get("photo_id"),
@@ -487,9 +704,11 @@ async def product_save(message: Message, state: FSMContext, db: Database) -> Non
     await state.clear()
     product = await db.get_product(product_id)
     category = await db.get_category(int(data["category_id"]))
+    products = await db.list_admin_products(int(data["category_id"]))
     await _delete_input(message)
-    if product and category:
-        await answer_screen(message, db, product_card(category, product), product_admin_menu(product), photo=product["photo_id"])
+    # show updated category menu so new product appears immediately
+    if category is not None:
+        await answer_screen(message, db, f"{tg('🛒')} <b>{category['title_html']}</b>\n\nТоваров: {len(products)}", category_menu(category, products))
 
 
 @router.callback_query(F.data.regexp(r"^a:prod:\d+$"))
@@ -542,8 +761,10 @@ async def product_edit_save(message: Message, state: FSMContext, db: Database) -
         if not title:
             await _update_prompt_from_input(message, state, "Название не должно быть пустым.", menu)
             return
-        await db.update_product_field(product_id, "title_text", title)
+        title_text, icon_id = split_button_icon(title, first_custom_emoji_id(message))
+        await db.update_product_field(product_id, "title_text", title_text)
         await db.update_product_field(product_id, "title_html", html_from_message(message))
+        await db.update_product_field(product_id, "icon_custom_emoji_id", icon_id)
     elif field == "price":
         amount = parse_amount(message.text or "")
         if amount is None:
@@ -567,48 +788,9 @@ async def product_edit_save(message: Message, state: FSMContext, db: Database) -
     await _delete_input(message)
     await state.clear()
     if product and category:
-        await answer_screen(message, db, product_card(category, product), product_admin_menu(product), photo=product["photo_id"])
-
-
-@router.message()
-async def _admin_fallback(message: Message, state: FSMContext, db: Database) -> None:
-    st = await state.get_state()
-    if st == ProductStates.view_url.state:
-        data = await state.get_data()
-        view_url = (message.text or "").strip()
-        if view_url == "-":
-            view_url = ""
-        product_id = await db.create_product(
-            category_id=int(data["category_id"]),
-            title_text=str(data["title_text"]),
-            title_html=str(data["title_html"]),
-            price=float(data["price"]),
-            description_html=str(data["description_html"]),
-            photo_id=data.get("photo_id"),
-            view_url=view_url or None,
-        )
-        await state.clear()
-        product = await db.get_product(product_id)
-        category = await db.get_category(int(data["category_id"]))
-        await _delete_input(message)
-        if product and category:
-            await answer_screen(message, db, product_card(category, product), product_admin_menu(product), photo=product["photo_id"])
-        return
-
-    if st == ProductEditStates.value.state:
-        data = await state.get_data()
-        field = str(data.get("field") or "")
-        if field == "view":
-            raw = (message.text or "").strip()
-            await db.update_product_field(int(data["product_id"]), "view_url", None if raw == "-" else raw)
-            product = await db.get_product(int(data["product_id"]))
-            category = await db.get_category(int(product["category_id"])) if product else None
-            await _delete_input(message)
-            await state.clear()
-            if product and category:
-                await answer_screen(message, db, product_card(category, product), product_admin_menu(product), photo=product["photo_id"])
-            return
-
+        # after editing, show category menu so changes reflect immediately
+        products = await db.list_admin_products(int(category['id']))
+        await answer_screen(message, db, f"{tg('🛒')} <b>{category['title_html']}</b>\n\nТоваров: {len(products)}", category_menu(category, products))
 
 @router.callback_query(F.data.startswith("a:prod:toggle:"))
 async def product_toggle(callback: CallbackQuery, db: Database) -> None:
@@ -919,7 +1101,8 @@ async def broadcast_button_text_save(message: Message, state: FSMContext) -> Non
             broadcast_buttons_menu((await state.get_data()).get("buttons") or []),
         )
         return
-    await state.update_data(button_text=text)
+    button_text, icon_id = split_button_icon(text, first_custom_emoji_id(message))
+    await state.update_data(button_text=button_text, button_icon_id=icon_id)
     await state.set_state(BroadcastStates.button_url)
     await _update_prompt_from_input(message, state, "Теперь отправьте ссылку для кнопки.")
 
@@ -946,9 +1129,10 @@ async def broadcast_button_style_save(callback: CallbackQuery, state: FSMContext
             "text": str(data.get("button_text") or "Кнопка"),
             "url": str(data.get("button_url") or "https://t.me"),
             "style": style,
+            "icon_custom_emoji_id": data.get("button_icon_id"),
         }
     )
-    await state.update_data(buttons=buttons, button_text=None, button_url=None)
+    await state.update_data(buttons=buttons, button_text=None, button_url=None, button_icon_id=None)
     await answer_screen(callback, db, _broadcast_state_text(await state.get_data()), broadcast_start())
 
 

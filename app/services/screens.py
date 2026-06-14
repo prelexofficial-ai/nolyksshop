@@ -23,8 +23,22 @@ async def answer_screen(
 
     text = premiumize_html(text)
     banner = photo or (await db.get_setting("banner_url")).strip()
+
+    async def send_text_replacement() -> Message | None:
+        try:
+            sent = await message.answer(text, reply_markup=reply_markup)
+        except TelegramBadRequest:
+            return None
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+        return sent
+
     if isinstance(target, CallbackQuery):
         if banner:
+            if len(text) > 1024:
+                return await send_text_replacement()
             try:
                 updated = await message.edit_media(
                     media=InputMediaPhoto(media=banner, caption=text),
@@ -55,9 +69,11 @@ async def answer_screen(
                 updated = await message.edit_caption(caption=text, reply_markup=reply_markup)
                 return updated if isinstance(updated, Message) else message
             except TelegramBadRequest:
-                return None
+                return await send_text_replacement()
 
     if banner:
+        if len(text) > 1024:
+            return await message.answer(text, reply_markup=reply_markup)
         try:
             return await message.answer_photo(photo=banner, caption=text, reply_markup=reply_markup)
         except TelegramBadRequest:

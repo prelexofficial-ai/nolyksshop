@@ -11,6 +11,13 @@ from app.keyboards.premium import button as premium_button, emoji_id, split_butt
 from app.utils.formatting import money
 
 
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 SETTINGS_LABELS = {
     "owner_username": "Username владельца",
     "logs_chat_id": "Чат логов",
@@ -19,7 +26,7 @@ SETTINGS_LABELS = {
 TEXT_LABELS = {
     "main_text": "Главное меню",
     "profile_text": "Профиль",
-    "info_text": "Инфа",
+    "info_text": "Текст инфы",
     "faq_text": "FAQ",
     "topup_text": "Пополнение: выбор способа",
     "crypto_amount_text": "CryptoBot: ввод суммы",
@@ -71,10 +78,53 @@ def settings_menu() -> InlineKeyboardMarkup:
 def appearance_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     premium_button(kb, "🖼", "Баннер", callback_data="a:set:banner_url")
+    premium_button(kb, "ℹ️", "Информация", callback_data="a:info:buttons")
     for key, label in TEXT_LABELS.items():
         kb.button(text=label, callback_data=f"a:set:{key}")
     premium_button(kb, "⬅️", "Назад", callback_data="a:main")
     kb.adjust(1)
+    return kb.as_markup()
+
+
+def info_buttons_menu(buttons: Iterable[Any]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    premium_button(kb, "➕", "Добавить кнопку", callback_data="a:info:btn:add")
+    for item in buttons:
+        kwargs = {
+            "text": str(item["text"]),
+            "callback_data": f"a:info:btn:{item['id']}",
+        }
+        icon_id = _row_value(item, "icon_custom_emoji_id")
+        if icon_id:
+            kwargs["icon_custom_emoji_id"] = icon_id
+        kb.button(**kwargs)
+    premium_button(kb, "⬅️", "Назад", callback_data="a:appearance")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def info_button_edit_menu(button: Any) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    button_id = int(button["id"])
+    premium_button(kb, "✏️", "Текст", callback_data=f"a:info:edit:{button_id}:text")
+    premium_button(kb, "🔗", "Ссылка", callback_data=f"a:info:edit:{button_id}:url")
+    premium_button(kb, "🎨", "Стиль", callback_data=f"a:info:style:{button_id}")
+    premium_button(kb, "⬅️", "Влево", callback_data=f"a:info:move:{button_id}:left")
+    premium_button(kb, "➡️", "Вправо", callback_data=f"a:info:move:{button_id}:right")
+    premium_button(kb, "🗑", "Удалить", callback_data=f"a:info:del:{button_id}")
+    premium_button(kb, "⬅️", "К кнопкам", callback_data="a:info:buttons")
+    kb.adjust(2, 1, 2, 1, 1)
+    return kb.as_markup()
+
+
+def info_button_style_menu(button_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Default", callback_data=f"a:info:style:{button_id}:default")
+    kb.button(text="Primary", callback_data=f"a:info:style:{button_id}:primary")
+    kb.button(text="Success", callback_data=f"a:info:style:{button_id}:success")
+    kb.button(text="Danger", callback_data=f"a:info:style:{button_id}:danger")
+    premium_button(kb, "⬅️", "Назад", callback_data=f"a:info:btn:{button_id}")
+    kb.adjust(2, 2, 1)
     return kb.as_markup()
 
 
@@ -91,16 +141,11 @@ def catalog_menu(categories: Iterable[Any]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     premium_button(kb, "➕", "Добавить категорию", callback_data="a:cat:add")
     for category in categories:
-        # prefer stored icon_custom_emoji_id from DB, fallback to detecting symbol in title_text
-        stored_icon = category.get("icon_custom_emoji_id") if isinstance(category, dict) else None
-        if stored_icon:
-            text = str(category["title_text"]).strip()
-            kwargs = {"callback_data": f"a:cat:{category['id']}", "text": text, "icon_custom_emoji_id": stored_icon}
-        else:
-            text, icon = split_button_icon(str(category["title_text"]))
-            kwargs = {"callback_data": f"a:cat:{category['id']}", "text": text}
-            if icon:
-                kwargs["icon_custom_emoji_id"] = icon
+        text, icon = split_button_icon(str(category["title_text"]))
+        stored_icon = _row_value(category, "icon_custom_emoji_id")
+        kwargs = {"callback_data": f"a:cat:{category['id']}", "text": text}
+        if stored_icon or icon:
+            kwargs["icon_custom_emoji_id"] = stored_icon or icon
         kb.button(**kwargs)
     premium_button(kb, "⬅️", "Назад", callback_data="a:main")
     kb.adjust(1)
@@ -114,12 +159,12 @@ def category_menu(category: Any, products: Iterable[Any]) -> InlineKeyboardMarku
     premium_button(kb, "🗑", "Удалить категорию", callback_data=f"a:cat:del:{category['id']}")
     for product in products:
         status = "" if int(product["is_active"]) else " [выкл]"
-        # split possible premium emoji from product title and pass as button icon
         title_text, icon = split_button_icon(str(product['title_text']))
+        stored_icon = _row_value(product, "icon_custom_emoji_id")
         text = f"{title_text} - ${money(product['price'])}{status}"
         kwargs = {"text": text, "callback_data": f"a:prod:{product['id']}"}
-        if icon:
-            kwargs["icon_custom_emoji_id"] = icon
+        if stored_icon or icon:
+            kwargs["icon_custom_emoji_id"] = stored_icon or icon
         kb.button(**kwargs)
     premium_button(kb, "⬅️", "Назад", callback_data="a:catalog")
     kb.adjust(1)
