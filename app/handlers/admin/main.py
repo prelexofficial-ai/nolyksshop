@@ -696,11 +696,16 @@ async def product_save(message: Message, state: FSMContext, db: Database) -> Non
     await state.clear()
     product = await db.get_product(product_id)
     category = await db.get_category(int(data["category_id"]))
-    products = await db.list_admin_products(int(data["category_id"]))
     await _delete_input(message)
-    # show updated category menu so new product appears immediately
-    if category is not None:
-        await answer_screen(message, db, f"{tg('🛒')} <b>{category['title_html']}</b>\n\nТоваров: {len(products)}", category_menu(category, products))
+    # show product card with photo so admin can verify everything is correct
+    if product is not None and category is not None:
+        await answer_screen(
+            message,
+            db,
+            product_card(category, product),
+            product_admin_menu(product),
+            photo=product["photo_id"],
+        )
 
 
 @router.callback_query(F.data.regexp(r"^a:prod:\d+$"))
@@ -780,9 +785,14 @@ async def product_edit_save(message: Message, state: FSMContext, db: Database) -
     await _delete_input(message)
     await state.clear()
     if product and category:
-        # after editing, show category menu so changes reflect immediately
-        products = await db.list_admin_products(int(category['id']))
-        await answer_screen(message, db, f"{tg('🛒')} <b>{category['title_html']}</b>\n\nТоваров: {len(products)}", category_menu(category, products))
+        # after editing, show product card with photo so changes are immediately visible
+        await answer_screen(
+            message,
+            db,
+            product_card(category, product),
+            product_admin_menu(product),
+            photo=product["photo_id"],
+        )
 
 @router.callback_query(F.data.startswith("a:prod:toggle:"))
 async def product_toggle(callback: CallbackQuery, db: Database) -> None:

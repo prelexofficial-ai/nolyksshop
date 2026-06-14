@@ -80,10 +80,12 @@ def product_card(category: Any, product: Any) -> str:
 
 
 def _maybe_blockquote(description_html: str, char_threshold: int = 120, line_threshold: int = 3) -> str:
+    if not description_html or not description_html.strip():
+        return "—"
     plain = strip_html(description_html)
-    lines = [l for l in plain.splitlines() if l.strip()]
+    lines = [line for line in plain.splitlines() if line.strip()]
     if len(plain) > char_threshold or len(lines) > line_threshold:
-        return f"<blockquote>{description_html}</blockquote>"
+        return f"<blockquote expandable>{description_html}</blockquote>"
     return description_html
 
 
