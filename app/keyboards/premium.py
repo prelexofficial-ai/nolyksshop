@@ -16,6 +16,7 @@ PREMIUM_EMOJI_IDS = {
     "👥": "5870772616305839506",
     "📊": "5213399275760814479",
     "📣": "5345952175652629268",
+    "📢": "5345952175652629268",
     "🔐": "5211096541929968385",
     "🎁": "4924874531140535819",
     "🏠": "5843680709926981861",
@@ -88,6 +89,17 @@ def first_custom_emoji_id(message: Any) -> str | None:
     return None
 
 
+def _remove_utf16_span(text: str, offset: int, length: int) -> str:
+    encoded = text.encode("utf-16-le")
+    start = max(offset, 0) * 2
+    end = max(offset + length, 0) * 2
+    try:
+        cleaned = (encoded[:start] + encoded[end:]).decode("utf-16-le")
+    except UnicodeDecodeError:
+        return text
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+
 def split_button_icon(text: str, custom_emoji_id: str | None = None) -> tuple[str, str | None]:
     clean_text = text.strip()
     icon_id = custom_emoji_id
@@ -97,6 +109,21 @@ def split_button_icon(text: str, custom_emoji_id: str | None = None) -> tuple[st
             icon_id = icon_id or emoji_id(symbol)
             break
     return clean_text or text.strip(), icon_id
+
+
+def split_message_button_icon(message: Any, text: str | None = None) -> tuple[str, str | None]:
+    raw_text = text if text is not None else getattr(message, "text", None) or getattr(message, "caption", None) or ""
+    entities = getattr(message, "entities", None) or getattr(message, "caption_entities", None) or []
+    for entity in entities:
+        entity_type = getattr(entity, "type", "")
+        value = getattr(entity_type, "value", str(entity_type))
+        custom_emoji_id = getattr(entity, "custom_emoji_id", None)
+        if value == "custom_emoji" and custom_emoji_id:
+            offset = int(getattr(entity, "offset", 0))
+            length = int(getattr(entity, "length", 0))
+            clean_text = _remove_utf16_span(raw_text, offset, length)
+            return split_button_icon(clean_text, str(custom_emoji_id))
+    return split_button_icon(raw_text)
 
 
 def url_button_kwargs(

@@ -13,9 +13,9 @@ from app.database import Database
 from app.filters import IsAdmin
 from app.keyboards.premium import (
     emoji_id,
-    first_custom_emoji_id,
     premiumize_html,
     split_button_icon,
+    split_message_button_icon,
     tg,
     url_button_kwargs,
 )
@@ -369,7 +369,7 @@ async def info_button_text_save(message: Message, state: FSMContext, db: Databas
             info_buttons_menu(await db.list_info_buttons()),
         )
         return
-    text, icon_id = split_button_icon(raw_text, first_custom_emoji_id(message))
+    text, icon_id = split_message_button_icon(message, plain_from_message(message))
     await state.update_data(info_button_text=text, info_button_icon_id=icon_id)
     await state.set_state(InfoButtonStates.url)
     await _update_prompt_from_input(message, state, "Теперь отправьте ссылку для кнопки.")
@@ -436,7 +436,7 @@ async def info_button_edit_text_save(message: Message, state: FSMContext, db: Da
     if not raw_text:
         await _update_prompt_from_input(message, state, "Текст кнопки не должен быть пустым.", menu)
         return
-    text, icon_id = split_button_icon(raw_text, first_custom_emoji_id(message))
+    text, icon_id = split_message_button_icon(message, plain_from_message(message))
     await db.update_info_button_field(button_id, "text", text)
     await db.update_info_button_field(button_id, "icon_custom_emoji_id", icon_id)
     updated = await db.get_info_button(button_id)
@@ -531,12 +531,7 @@ async def category_add_save(message: Message, state: FSMContext, db: Database) -
     if not title_text:
         await _update_prompt_from_input(message, state, "Название не должно быть пустым.", catalog_menu(await db.list_categories()))
         return
-    # try to extract custom emoji id from message entities (tg-emoji)
-    custom_id = first_custom_emoji_id(message)
-    # if no custom id, try to detect known premium symbol in text
-    cleaned_title, mapped_icon = split_button_icon(title_text)
-    title_text = cleaned_title
-    icon_id = custom_id or mapped_icon
+    title_text, icon_id = split_message_button_icon(message, plain_from_message(message))
     await db.create_category(title_text, html_from_message(message), icon_id)
     await _update_prompt_from_input(
         message,
@@ -592,10 +587,7 @@ async def category_edit_save(message: Message, state: FSMContext, db: Database) 
     if not title_text:
         await _update_prompt_from_input(message, state, "Название не должно быть пустым.", menu)
         return
-    custom_id = first_custom_emoji_id(message)
-    cleaned_title, mapped_icon = split_button_icon(title_text)
-    title_text = cleaned_title
-    icon_id = custom_id or mapped_icon
+    title_text, icon_id = split_message_button_icon(message, plain_from_message(message))
     await db.update_category(category_id, title_text, html_from_message(message), icon_id)
     category = await db.get_category(category_id)
     products = await db.list_admin_products(category_id)
@@ -639,7 +631,7 @@ async def product_title(message: Message, state: FSMContext) -> None:
     if not title:
         await _update_prompt_from_input(message, state, "Название не должно быть пустым.")
         return
-    title_text, icon_id = split_button_icon(title, first_custom_emoji_id(message))
+    title_text, icon_id = split_message_button_icon(message, plain_from_message(message))
     await state.update_data(title_text=title_text, title_html=html_from_message(message), title_icon_id=icon_id)
     await state.set_state(ProductStates.price)
     await _update_prompt_from_input(message, state, "Введите цену товара в долларах.")
@@ -761,7 +753,7 @@ async def product_edit_save(message: Message, state: FSMContext, db: Database) -
         if not title:
             await _update_prompt_from_input(message, state, "Название не должно быть пустым.", menu)
             return
-        title_text, icon_id = split_button_icon(title, first_custom_emoji_id(message))
+        title_text, icon_id = split_message_button_icon(message, plain_from_message(message))
         await db.update_product_field(product_id, "title_text", title_text)
         await db.update_product_field(product_id, "title_html", html_from_message(message))
         await db.update_product_field(product_id, "icon_custom_emoji_id", icon_id)
@@ -1101,7 +1093,7 @@ async def broadcast_button_text_save(message: Message, state: FSMContext) -> Non
             broadcast_buttons_menu((await state.get_data()).get("buttons") or []),
         )
         return
-    button_text, icon_id = split_button_icon(text, first_custom_emoji_id(message))
+    button_text, icon_id = split_message_button_icon(message, plain_from_message(message))
     await state.update_data(button_text=button_text, button_icon_id=icon_id)
     await state.set_state(BroadcastStates.button_url)
     await _update_prompt_from_input(message, state, "Теперь отправьте ссылку для кнопки.")
