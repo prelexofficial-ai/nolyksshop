@@ -75,8 +75,16 @@ def product_card(category: Any, product: Any) -> str:
         f"┠Цена: ${money(product['price'])}\n"
         f"┖Дата публикации: {html.escape(created)}\n\n"
         f"{tg('❓')} <b>Описание:</b>\n"
-        f"<blockquote>{product['description_html']}</blockquote>"
+        f"{_maybe_blockquote(product['description_html'])}"
     )
+
+
+def _maybe_blockquote(description_html: str, char_threshold: int = 120, line_threshold: int = 3) -> str:
+    plain = strip_html(description_html)
+    lines = [l for l in plain.splitlines() if l.strip()]
+    if len(plain) > char_threshold or len(lines) > line_threshold:
+        return f"<blockquote>{description_html}</blockquote>"
+    return description_html
 
 
 def profile_text(base_text: str, user: Any) -> str:

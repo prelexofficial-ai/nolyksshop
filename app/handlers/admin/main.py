@@ -570,6 +570,46 @@ async def product_edit_save(message: Message, state: FSMContext, db: Database) -
         await answer_screen(message, db, product_card(category, product), product_admin_menu(product), photo=product["photo_id"])
 
 
+@router.message()
+async def _admin_fallback(message: Message, state: FSMContext, db: Database) -> None:
+    st = await state.get_state()
+    if st == ProductStates.view_url.state:
+        data = await state.get_data()
+        view_url = (message.text or "").strip()
+        if view_url == "-":
+            view_url = ""
+        product_id = await db.create_product(
+            category_id=int(data["category_id"]),
+            title_text=str(data["title_text"]),
+            title_html=str(data["title_html"]),
+            price=float(data["price"]),
+            description_html=str(data["description_html"]),
+            photo_id=data.get("photo_id"),
+            view_url=view_url or None,
+        )
+        await state.clear()
+        product = await db.get_product(product_id)
+        category = await db.get_category(int(data["category_id"]))
+        await _delete_input(message)
+        if product and category:
+            await answer_screen(message, db, product_card(category, product), product_admin_menu(product), photo=product["photo_id"])
+        return
+
+    if st == ProductEditStates.value.state:
+        data = await state.get_data()
+        field = str(data.get("field") or "")
+        if field == "view":
+            raw = (message.text or "").strip()
+            await db.update_product_field(int(data["product_id"]), "view_url", None if raw == "-" else raw)
+            product = await db.get_product(int(data["product_id"]))
+            category = await db.get_category(int(product["category_id"])) if product else None
+            await _delete_input(message)
+            await state.clear()
+            if product and category:
+                await answer_screen(message, db, product_card(category, product), product_admin_menu(product), photo=product["photo_id"])
+            return
+
+
 @router.callback_query(F.data.startswith("a:prod:toggle:"))
 async def product_toggle(callback: CallbackQuery, db: Database) -> None:
     await callback.answer("Готово")
